@@ -136,8 +136,8 @@ int main(int argc, char *argv[]) {
         exit(0);
     } 
     
-    int R4P[2];
-    pipe(R4P);
+    int R45P[2];
+    pipe(R45P);
 
     if (fork() == 0)
     {
@@ -145,11 +145,11 @@ int main(int argc, char *argv[]) {
         close(R1R2[0]); close(R1R2[1]);
         close(R2R3[0]); close(R2R3[1]);
         close(R3R4[1]);
-        close(R4P[0]);
+        close(R45P[0]);
         close(R3R5[0]); close(R3R5[1]);
 
         FILE* in = fdopen(R3R4[0], "r");
-        FILE* out = fdopen(R4P[1], "w");
+        FILE* out = fdopen(R45P[1], "w");
         char line[256];
         while (fgets(line, sizeof(line), in) != NULL)
         {
@@ -169,8 +169,7 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
 
-    int R5P[2];
-    pipe(R5P);
+    
 
     if (fork() == 0)
     {
@@ -179,12 +178,11 @@ int main(int argc, char *argv[]) {
         close(R2R3[0]); close(R2R3[1]);
         close(R3R4[1]); close(R3R4[0]); 
         close(R3R5[1]);
-        close(R4P[0]); close(R4P[1]);
-        close(R5P[0]);
+        close(R45P[0]); 
 
 
         FILE* in = fdopen(R3R5[0], "r");
-        FILE* out = fdopen(R5P[1], "w");
+        FILE* out = fdopen(R45P[1], "w");
         char line[256];
         while (fgets(line, sizeof(line), in) != NULL)
         {
@@ -214,18 +212,17 @@ int main(int argc, char *argv[]) {
         close(R3R4[0]);
         close(R3R5[1]); 
         close(R3R5[0]);
-        close(R4P[1]);
-        close(R5P[1]);
+        close(R45P[1]);
+        
 
-        FILE* r4read = fdopen(R4P[0], "r");
-        FILE* r5read = fdopen(R5P[0], "r");
+        FILE* rread = fdopen(R45P[0], "r");
 
         char line[200];
         int count4 = 0;
         int count5 = 0;
 
-        while (fgets(line, sizeof(line), r4read)) {
-            count4++;
+        while (fgets(line, sizeof(line), rread)) {
+
             line[strcspn(line, "\n")] = '\0';
 
             char* colon = strchr(line, '.');
@@ -238,7 +235,13 @@ int main(int argc, char *argv[]) {
 
                 // odrež na prvej medzere pred "("
                 namebuf[strcspn(namebuf, " (")] = '\0';
-
+                if (isupper(namebuf[0]))
+                {
+                    count5++;
+                } else {
+                    count4++;
+                }
+                
                 normalize(namebuf);
                 for (int i = 0; i < line_count; i++) {
                     if (strcmp(names[i], namebuf) == 0) {
@@ -250,40 +253,11 @@ int main(int argc, char *argv[]) {
 
             printf("[PID %d] Přijat paket: %s -> %d\n", getpid(), line, index);
         }
-        while (fgets(line, sizeof(line), r5read)) {
-            count5++;
-            line[strcspn(line, "\n")] = '\0';
-
-            char* colon = strchr(line, '.');
-            int index = -1;
-
-            if (colon) {
-                char namebuf[100];
-                strncpy(namebuf, colon + 2, sizeof(namebuf));
-                namebuf[sizeof(namebuf) - 1] = '\0';
-
-                // odrež na prvej medzere pred "("
-                namebuf[strcspn(namebuf, " (")] = '\0';
-
-                normalize(namebuf);
-                for (int i = 0; i < line_count; i++) {
-                    if (strcmp(names[i], namebuf) == 0) {
-                        index = i + 1;
-                        break;
-                    }
-                }
-            }
-
-            printf("[PID %d] Přijat paket: %s -> %d\n", getpid(), line, index);
-        }
-        
         
         printf("Router 4 spracoval: %d paketov\n", count4);
         printf("Router 5 spracoval: %d paketov\n", count5); 
 
-        fclose(r4read);
-        fclose(r5read);
-                        
+        fclose(rread);                
         while (wait(NULL) > 0);
         
     }
