@@ -109,6 +109,24 @@ void help( int t_narg, char **t_args )
 }
 
 //***************************************************************************
+
+void* showStats(void* arg) {
+    int client = *(int*)arg;
+    char numOfClients[200];
+    snprintf(numOfClients, sizeof(numOfClients), "Currently connected clients: %d\n", client_count); 
+    write(client, numOfClients, strlen(numOfClients));
+    for (int i = 0; i < client_count; i++)
+    {   
+        char buff[200];
+        snprintf(buff, sizeof(buff), "  - %s (socket %d)\n", nicknames[i], sockets[i]);
+        write(client, buff, strlen(buff));
+    }
+    return NULL;
+}
+
+
+
+//***************************************************************************
 // každé vlákno rieši jedného klienta
 
 void* handle_client(void* arg) {
@@ -122,6 +140,7 @@ void* handle_client(void* arg) {
     int client_socket = sockets[my_index];
 
     log_msg(LOG_INFO, "New thread started for client %d", client_socket);
+
     char buffer[256];
 
     write(client_socket, "Enter your nickname: ", 21);
@@ -133,19 +152,90 @@ void* handle_client(void* arg) {
     snprintf(welcome, sizeof(welcome), "Welcome, %s!\n", nicknames[my_index]);
     write(client_socket, welcome, strlen(welcome));
 
+    char joinedChat[100];
+    snprintf(joinedChat, sizeof(joinedChat), "%s joined the chat!\n", nicknames[my_index]);
+    /* poslem ostatnym spravu o tom ze sa pripojil*/
+    for (int i = 0; i < client_count; i++)
+    {
+        if (sockets[i] != client_socket)
+        {
+            write(sockets[i], joinedChat, strlen(joinedChat));
+        }
+        
+    }
+    
+
+
     int lread;
     while((lread = read(client_socket, buffer, sizeof(buffer))) > 0) {
         buffer[lread] = '\0';   
 
         if (!strncasecmp(buffer, STR_CLOSE, strlen(STR_CLOSE))) {
+            
+            char leftChat[100];
+            snprintf(leftChat, sizeof(leftChat), "%s left the chat!\n", nicknames[my_index]);
+            /* poslem ostatnym spravu o tom ze sa pripojil*/
+            for (int i = 0; i < client_count; i++)
+            {
+                if (sockets[i] != client_socket)
+                {
+                    write(sockets[i], leftChat, strlen(leftChat));
+                }
+                
+            }
+            
             log_msg(LOG_INFO, "Client sent 'close' request to close connection.");
             break; 
         }
 
+        if (!strncasecmp(buffer, "/msg", 4))
+        {
+            char target[50];
+            char message[200];
+            if (sscanf(buffer, "/msg %49s %[^\n]", target, message) == 2)
+            {
+                int found = -1;
+                for (int i = 0; i < client_count; i++)
+                {
+                    if (strcmp(nicknames[i], target) == 0)
+                    {
+                        found = i;
+                        break;
+                    }
+                    
+                }
+
+                if (found != -1)
+                {
+                    char private_msg[512];
+                    snprintf(private_msg, sizeof(private_msg), "[Private from %s]: %s\n", nicknames[my_index], message);
+                    write(sockets[found], private_msg, strlen(private_msg));
+                } else {
+                    char err_msg[100];
+                    snprintf(err_msg, sizeof(err_msg), "User '%s' not found.\n", target);
+                    write(client_socket, err_msg, strlen(err_msg));
+                }
+            } else {
+                write(client_socket, "Usage: /msg <nick> <text>\n", 27);
+            }
+            continue;
+        }
+
+        if (!strncasecmp(buffer, "/stats", 6))
+        {
+            pthread_t stat_thread;
+            pthread_create(&stat_thread, NULL, showStats, &client_socket);
+            pthread_detach(stat_thread);
+            continue;
+        }
+        
+        
+
+
         char message[600];
         snprintf(message, sizeof(message), "%s: %s", nicknames[my_index], buffer);
 
-         write(STDOUT_FILENO, message, strlen(message));
+        write(STDOUT_FILENO, message, strlen(message));
 
     
         for (int i = 0; i < client_count; i++) {
@@ -162,6 +252,8 @@ void* handle_client(void* arg) {
     if (sockets[i] == client_socket) {
         for (int j = i; j < client_count - 1; j++) {
             sockets[j] = sockets[j + 1]; // posuň všetkých o jedno dozadu
+            strcpy(nicknames[j], nicknames[j + 1]); 
+            indexes[j] = j;
         }
         client_count--;
         break;
@@ -171,6 +263,89 @@ void* handle_client(void* arg) {
 
 }
 
+void* consoleBroadcast(void* arg) {
+    char input[256];
+    while (1)
+    {
+        if (fgets(input, sizeof(input), stdin)) 
+        {
+            input[strcspn(input, "\n")] = '\0';
+            if (!strncasecmp(input, "quit", 4))
+            {   
+                log_msg(LOG_INFO, "Server is shutting down");
+                for (int i = 0; i < client_count; i++)
+                {
+                    write(sockets[i], "Server is shutting down...\n", 28);
+                }
+                exit(0);
+                
+            }
+
+            if (!strncasecmp(input, "/kick", 5))
+            {
+                char target[50];
+                if (sscanf(input + 6, "%49s[^\n]", target) == 1)
+                {
+                    int found = -1;
+                    for (int i = 0; i < client_count; i++)
+                    {
+                        if (strcmp(nicknames[i], target) == 0)
+                        {
+                            found = i;
+                            break;
+                        }
+                        
+                    }
+
+                    if (found != -1)
+                    {
+                        char kickMessage[250];
+                        snprintf(kickMessage, sizeof(kickMessage), "You have been kicked from this channel\n");
+                        write(sockets[found], kickMessage, strlen(kickMessage));
+                        shutdown(sockets[found], SHUT_RDWR);
+                        close(sockets[found]);
+
+                        for (int j = found; j < client_count - 1; j++)
+                        {
+                            sockets[j] = sockets[j+1];
+                            strcpy(nicknames[j], nicknames[j+1]);
+                            indexes[j] = j;
+                        }
+                        client_count--;
+
+                        log_msg(LOG_INFO, "Client %s was kicked", target);
+                        char letOthersKnow[100];
+                        snprintf(letOthersKnow, sizeof(letOthersKnow), "Client %s was kicked by server\n", target);
+                        for (int i = 0; i < client_count; i++)
+                        {
+                           write(sockets[i], letOthersKnow, strlen(letOthersKnow)); 
+                        }
+                        
+                    } else {
+                        log_msg(LOG_INFO, "Client %s was not found", target);
+                    }
+                }
+                continue;
+            }
+            
+
+
+
+            char message[300];
+            snprintf(message, sizeof(message), "Server: %s\n", input);
+            for (int i = 0; i < client_count; i++)
+            {
+                write(sockets[i], message, strlen(message));
+            }
+            
+            
+        }
+        
+    }
+    return NULL;
+    
+
+}
 
 
 //***************************************************************************
@@ -241,6 +416,9 @@ int main( int t_narg, char **t_args )
     }
 
     log_msg( LOG_INFO, "Enter 'quit' to quit server." );
+    pthread_t broadcastThread;
+    pthread_create(&broadcastThread, NULL, consoleBroadcast, NULL);
+    pthread_detach(broadcastThread);
 
 
     pollfd pollfds[2];
@@ -260,10 +438,10 @@ int main( int t_narg, char **t_args )
             log_msg( LOG_ERROR, "Function poll failed!" );
             exit( 1 );
         }
-        
+        /*
         if (pollfds[0].revents & POLLIN)
         {
-            // ii terminal vsetkym clientom
+            //  terminal vsetkym clientom
             char l_buf[256];
             int lread;
             while ((lread = read(STDIN_FILENO, l_buf, sizeof(l_buf))) > 0)
@@ -276,6 +454,7 @@ int main( int t_narg, char **t_args )
             }
             
         }
+        */
 
         if (pollfds[1].revents & POLLIN)
         {
